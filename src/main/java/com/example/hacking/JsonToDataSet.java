@@ -5,6 +5,8 @@ import org.datavec.api.records.reader.RecordReader;
 import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
 import org.datavec.api.split.FileSplit;
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
+import org.deeplearning4j.datasets.iterator.utilty.ListDataSetIterator;
+import org.deeplearning4j.models.embeddings.wordvectors.WordVectors;
 import org.deeplearning4j.models.word2vec.Word2Vec;
 import org.deeplearning4j.text.sentenceiterator.CollectionSentenceIterator;
 import org.deeplearning4j.text.sentenceiterator.SentenceIterator;
@@ -14,6 +16,7 @@ import org.deeplearning4j.text.tokenization.tokenizerfactory.TokenizerFactory;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.nd4j.common.io.ClassPathResource;
+import org.nd4j.common.primitives.Pair;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.SplitTestAndTrain;
@@ -26,13 +29,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import org.deeplearning4j.models.word2vec.Word2Vec;
-import org.deeplearning4j.text.sentenceiterator.BasicLineIterator;
-import org.deeplearning4j.text.sentenceiterator.SentenceIterator;
-import org.deeplearning4j.text.tokenization.tokenizerfactory.DefaultTokenizerFactory;
-import org.deeplearning4j.text.tokenization.tokenizerfactory.TokenizerFactory;
-
 
 public class JsonToDataSet {
 
@@ -150,6 +148,99 @@ public class JsonToDataSet {
 
         features.divi(tokens.size());
         return features;
+    }
+
+//    public DataSet prepareDataSet(String labelsFilePath, String textFilePath, WordVectors wordVectors) throws IOException {
+//        // Reading JSON files
+//        String labelsContent = new String(Files.readAllBytes(Paths.get(labelsFilePath)));
+//        String textContent = new String(Files.readAllBytes(Paths.get(textFilePath)));
+//
+//        // Parsing JSON
+//        JSONObject labelsJson = new JSONObject(labelsContent);
+//        JSONObject textJson = new JSONObject(textContent);
+//
+//        List<Pair<String, String>> allData = new ArrayList<>();
+//
+//        for (String key : textJson.keySet()) {
+//            String text = textJson.getString(key);
+//            String label = labelsJson.getString(key);
+//            allData.add(new Pair<>(text, label));
+//        }
+//
+//        int numClasses = labelsJson.keySet().size();
+//
+//        // Now we need to transform these lists into the appropriate format for DataSet
+//        // Assuming that the text is already vectorized. If not, you need to vectorize it using Word2Vec or similar.
+//
+//        int batchSize = 50;
+//        int vectorSize = wordVectors.getWordVector(wordVectors.vocab().wordAtIndex(0)).length;
+//        ListDataSetIterator<Pair<String, String>> iterator = new ListDataSetIterator<>(allData, batchSize);
+//
+//        List<INDArray> featuresMask = new ArrayList<>();
+//        List<INDArray> labelsMask = new ArrayList<>();
+//        List<INDArray> features = new ArrayList<>();
+//        List<INDArray> labels = new ArrayList<>();
+//
+//        while (iterator.hasNext()) {
+//            DataSet pair = iterator.next();
+//
+//            INDArray featuresRow = wordVectors.getWordVectorsMean(Arrays.asList(pair.getFirst().split(" ")));
+//            INDArray labelsRow = Nd4j.create(1, numClasses);
+//            labelsRow.putScalar(labelsJson.getInt(pair.getSecond()), 1.0);
+//
+//            features.add(featuresRow);
+//            labels.add(labelsRow);
+//        }
+//
+//        return new DataSet(Nd4j.vstack(features), Nd4j.vstack(labels), Nd4j.vstack(featuresMask), Nd4j.vstack(labelsMask));
+//    }
+
+
+    public DataSet prepareDataSet(String labelsFilePath, String textFilePath, Word2Vec wordVectors) throws IOException {
+        // Reading JSON files
+        String labelsContent = new String(Files.readAllBytes(Paths.get(labelsFilePath)));
+        String textContent = new String(Files.readAllBytes(Paths.get(textFilePath)));
+
+        // Parsing JSON
+        JSONObject labelsJson = new JSONObject(labelsContent);
+        JSONObject textJson = new JSONObject(textContent);
+
+        // Prepare sentences for Word2Vec training
+        List<String> sentences = new ArrayList<>();
+        for (String key : textJson.keySet()) {
+            String text = textJson.getString(key);
+            sentences.addAll(Arrays.asList(text.split(" ")));
+        }
+        // Train Word2Vec model on all sentences
+        trainWord2Vec(sentences);
+
+        List<DataSet> allData = new ArrayList<>();
+        for (String key : textJson.keySet()) {
+            String text = textJson.getString(key);
+            String label = labelsJson.getString(key);
+
+            // Vectorize text using Word2Vec
+            INDArray featuresRow = transformTextWithWord2Vec(wordVectors, text);
+
+            INDArray labelsRow = Nd4j.create(1, labelsJson.keySet().size());
+            labelsRow.putScalar(labelsJson.getInt(label), 1.0);
+
+            allData.add(new DataSet(featuresRow, labelsRow));
+        }
+
+        int batchSize = 50;
+        ListDataSetIterator<DataSet> iterator = new ListDataSetIterator<>(allData, batchSize);
+
+        List<INDArray> features = new ArrayList<>();
+        List<INDArray> labels = new ArrayList<>();
+        while (iterator.hasNext()) {
+            DataSet dataSet = iterator.next();
+            features.add(dataSet.getFeatures());
+            labels.add(dataSet.getLabels());
+        }
+
+        // If you don't use masking, pass null for the mask arguments
+        return new DataSet(Nd4j.vstack(features), Nd4j.vstack(labels), null, null);
     }
 
 
